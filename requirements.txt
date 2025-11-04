@@ -1,0 +1,9 @@
+streamlit
+groq
+# Note: 'ollama' is a client. If you run the Ollama server locally, 
+# the Cloud deployment won't connect, but you need the library installed.
+# However, since Cloud cannot connect to your local Ollama server, 
+# you must rely on the Groq API key for the live demo.
+ollama 
+asyncio
+# Add any other libraries you use!
