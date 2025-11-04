@@ -1,25 +1,19 @@
 import asyncio
 import os
 import re
-import streamlit as st # Added Streamlit import for secrets
+import streamlit as st
+import requests # Added requests for reliable Groq/Ollama API calls
+import json
 from typing import Optional, Dict, Any, Awaitable, Callable, Tuple
 
 
 # --- LLM Client Setup ---
 
-try:
-    from groq import Groq
-except ImportError:
-    Groq = None
-
-try:
-    import ollama
-except ImportError:
-    ollama = None
-
 # Configuration
 MODEL_NAME = "llama3.1"
 GROQ_MODEL = "moonshotai/kimi-k2-instruct-0905"
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3")
 
 # CRITICAL FIX: Prioritize Streamlit secrets manager for deployment
 if "GROQ_API_KEY" in st.secrets:
@@ -28,70 +22,113 @@ else:
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY", None)
 
 # Initialize Clients
-if GROQ_API_KEY and Groq:
-    GROQ_CLIENT = Groq(api_key=GROQ_API_KEY)
-    HIGH_SPEED_MODE = True
-else:
-    GROQ_CLIENT = None
-    HIGH_SPEED_MODE = False
+# HIGH_SPEED_MODE is now purely determined by the presence of the API key,
+# avoiding dependency on a successful 'from groq import Groq'
+HIGH_SPEED_MODE = bool(GROQ_API_KEY)
+
 
 # --- Core LLM Call Functions ---
 
-def _ollama_generate(prompt: str, model: str = MODEL_NAME, temperature: float = 0.1) -> str:
+async def _ollama_generate(prompt: str) -> str:
     """
-    Synchronous call to Ollama with GUARANTEED string return on failure.
+    Synchronous function to call Ollama via requests, wrapped for async. 
+    GUARANTEED to return a string (error message if failed).
     """
-    if ollama is None:
-        return "Error: Ollama library is not installed."
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.1},
+    }
     
     try:
-        response = ollama.generate(
-            model=model,
-            prompt=prompt,
-            options={'temperature': temperature}
-        )
+        # Use requests, run in a thread to avoid blocking the event loop
+        response = await asyncio.to_thread(requests.post, OLLAMA_URL, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()
         
-        if isinstance(response, dict) and 'response' in response:
-            return response['response']
+        # Ollama returns a JSON response; extract the content
+        data = response.json()
+        content = data.get("response", "").strip()
+        
+        if content:
+            return content
         else:
-            return "Error: Ollama server returned an invalid or empty response format."
+            return "Error: Ollama server returned an empty response."
 
-    except Exception as e: 
-        # CATCH ALL: This handles connection errors, which is key to preventing the NoneType crash.
-        error_msg = str(e).splitlines()[0] if str(e) else "Unknown Ollama error."
-        print(f"Ollama Call Error: {error_msg}")
-        return f"Error: Failed to connect to Ollama server or model is missing. Please run 'ollama serve'. Details: {error_msg}"
+    except requests.exceptions.RequestException as e:
+        error_msg = str(e).splitlines()[0] if str(e) else "Unknown Request Error."
+        print(f"Ollama Request Error: {error_msg}")
+        return f"Error: Failed to connect to Ollama server. Details: {error_msg}"
+    except json.JSONDecodeError:
+        print("Ollama Response Error: Could not decode JSON.")
+        return "Error: Ollama server returned an invalid response format (not JSON)."
+    except Exception as e:
+        print(f"General Ollama Error: {e}")
+        return f"Error: An unexpected error occurred in Ollama call: {e}"
 
 
 async def call_llm(prompt_to_send: str, is_meta_prompt: bool = True) -> str:
     """
-    Asynchronously calls the LLM, prioritizing Groq, otherwise falling back to Ollama.
+    Asynchronously calls the LLM, prioritizing Groq (via requests), otherwise falling back to Ollama.
+    GUARANTEED to return a string.
     """
-    max_tokens = 500 if is_meta_prompt else 700
+    # Determine max tokens based on prompt type
+    max_tokens = 500 if is_meta_prompt else 700 
     
     if HIGH_SPEED_MODE:
-        try:
-            # Groq call (high-speed)
-            response = await asyncio.to_thread(
-                GROQ_CLIENT.chat.completions.create,
-                model=GROQ_MODEL,
-                messages=[{"role": "user", "content": prompt_to_send}],
-                temperature=0.1,
-                max_tokens=max_tokens,
-            )
-            return response.choices[0].message.content.strip()
+        # --- Groq Call (High Speed via requests) ---
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": prompt_to_send}],
+            "temperature": 0.1,
+            "stream": False,
+            "max_tokens": max_tokens,
+        }
+        
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                # Run the synchronous request in a separate thread
+                response = await asyncio.to_thread(requests.post, url, headers=headers, json=payload, timeout=30)
+                response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
+                
+                data = response.json()
+                # CRITICAL FIX: Direct access to content and validation
+                content = data.get('choices', [{}])[0].get('message', {}).get('content')
+                
+                # Check for None and return the content safely
+                if content:
+                    return content.strip()
+                
+            except requests.exceptions.RequestException as e:
+                print(f"Groq API Error on attempt {attempt+1}: {e}")
+            except (KeyError, IndexError) as e:
+                print(f"Groq Response Structure Error on attempt {attempt+1}: {e}")
+            except Exception as e:
+                # Catch general exceptions (e.g., JSONDecodeError)
+                print(f"General Groq Error on attempt {attempt+1}: {e}")
             
-        except Exception as ex: 
-            # Catch Groq API/network errors and fall back to Ollama.
-            print(f"API error (Groq), falling back to ollama: {ex}")
-            return await asyncio.to_thread(_ollama_generate, prompt_to_send)
-            
-    # Ollama call (Executed if HIGH_SPEED_MODE is False)
-    return await asyncio.to_thread(_ollama_generate, prompt_to_send)
+            # Exponential backoff
+            await asyncio.sleep(2 ** attempt)
+
+        # If Groq fails after retries, automatically fall back to Ollama
+        print(f"Groq failed after {max_retries} retries. Falling back to Ollama...")
+        return await _ollama_generate(prompt_to_send)
+
+    else:
+        # --- Ollama Call (Local Fallback) ---
+        print("Using Ollama (Local Fallback)...")
+        return await _ollama_generate(prompt_to_send)
+
 
 # --- Prompt Construction and Parsing ---
 
-# (build_meta_instruction remains the same)
 def build_meta_instruction(task_description: str, target_code: str) -> str:
     """
     Constructs the detailed system instruction for the Universal Optimization Agent.
