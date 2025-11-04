@@ -2,7 +2,7 @@
 import streamlit as st
 import asyncio
 from agents import apo_workflow # CORRECTED IMPORT: from agents (plural)
-from utils import HIGH_SPEED_MODE 
+from util import HIGH_SPEED_MODE 
 
 # --- Streamlit App Configuration ---
 st.set_page_config(
@@ -104,3 +104,4 @@ if st.button("Run Optimization Workflow", type="primary"):
                 # (due to LLM failure) or other errors.
                 st.error(f"An error occurred during execution: {e}")
                 st.warning("Please ensure your LLM configuration is correct (Groq API Key or 'ollama serve' is running).")
+
