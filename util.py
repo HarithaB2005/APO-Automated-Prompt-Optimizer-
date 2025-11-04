@@ -1,7 +1,7 @@
-# utils.py
 import asyncio
 import os
 import re
+import streamlit as st # Added Streamlit import for secrets
 from typing import Optional, Dict, Any, Awaitable, Callable, Tuple
 
 
@@ -20,7 +20,12 @@ except ImportError:
 # Configuration
 MODEL_NAME = "llama3.1"
 GROQ_MODEL = "moonshotai/kimi-k2-instruct-0905"
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", None)
+
+# CRITICAL FIX: Prioritize Streamlit secrets manager for deployment
+if "GROQ_API_KEY" in st.secrets:
+    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+else:
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", None)
 
 # Initialize Clients
 if GROQ_API_KEY and Groq:
