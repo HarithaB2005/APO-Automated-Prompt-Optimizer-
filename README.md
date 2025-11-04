@@ -4,7 +4,8 @@ The Autonomous Prompt Optimization (APO) Agent is the two-stage system that fixe
 🛠️ Setup and Installation
 Follow these steps to get a local copy running.
 1. Clone the Repository:
-     git clone [Your Repository Link Here] cd [your-repo-name]
+     git clone https://github.com/HarithaB2005/APO-Automated-Prompt-Optimizer-.git
+     cd APO-Automated-Prompt-Optimizer-
 3. Install Dependencies:
      Install the required Python packages using the provided requirements.txt file:
            pip install -r requirements.txt
